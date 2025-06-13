@@ -1,3 +1,6 @@
+<video src="demo.mp4" controls width="100%"></video>
+<small>Video sped up for demo purposes</small>
+
 # Runway API MCP Server
 
 This repository holds the code for a MCP server that calls the Runway API.
