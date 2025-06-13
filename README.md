@@ -1,0 +1,58 @@
+# Runway API MCP Server
+
+This repository holds the code for a MCP server that calls the Runway API.
+
+## Prerequisites
+
+Before starting, you'll need to have setup your Developer account on the [https://dev.runwayml.com/](Runway API), [https://docs.dev.runwayml.com/guides/setup/](setup Billing), and also created an API Key.
+
+This guide is written for MacOS users only, instructions for Windows will be coming soon.
+
+You'll also need [https://nodejs.org/](node) setup.
+
+## Setup
+
+1. Clone this repository and save it to a folder on your computer. Remember where you saved this folder because you'll need it in a later step.
+
+2. Duplicate `.env.example` and save it as `.env`. Update `RUNWAYML_API_SECRET` with your API key that you got from the [https://dev.runwayml.com/](Runway API).
+
+3. Run `npm install` in the folder, then `npm run build`. You should now see a new folder called `build` with a `index.js` file inside.
+
+### Using the MCP with Claude Desktop
+
+4. Follow the [https://modelcontextprotocol.io/quickstart/user#2-add-the-filesystem-mcp-server](instructions) to setup a config file for Claude. If you already have it, open it by running:
+
+MacOS
+
+```bashrc
+open ~/Library/Application Support/Claude/claude_desktop_config.json
+```
+
+Windows
+
+```powershell
+notepad %APPDATA%\Claude\claude_desktop_config.json
+```
+
+5. Add the `runway-api-mcp-server` to the config, make sure to replace the file path and Runway API key.
+
+```
+{
+  "mcpServers": {
+    "runway-api-mcp-server": {
+      "command": "node",
+      "args": ["<ABSOLUTE_PATH_TO_YOUR_CLONED_REPO_FROM_STEP_1>/build/index.js"],
+      "env": {
+        "RUNWAYML_API_SECRET": "<YOUR_RUNWAY_API_KEY_HERE>",
+        "MCP_TOOL_TIMEOUT": "1000000"
+      }
+    }
+  }
+}
+```
+
+6. Now restart Claude Desktop, and you should see the `runway-api-mcp-server` in Claude's tools:
+
+![Runway MCP Server Screenshot](screenshot.png)
+
+7. Now, try asking Claude to generate images or videos!
