@@ -1,5 +1,5 @@
 import "dotenv/config";
-import fetch, { RequestInit, Response } from "node-fetch";
+import fetch, { RequestInit } from "node-fetch";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
