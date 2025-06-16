@@ -89,11 +89,11 @@ server.tool(
 // 2. Generate image from text
 server.tool(
   "runway_generateImage",
-  `Generate an image from a text prompt. Available ratios are 1920:1080, 1080:1920, 1024:1024, 
+  `Generate an image from a text prompt and optional reference images. Available ratios are 1920:1080, 1080:1920, 1024:1024, 
   1360:768, 1080:1080, 1168:880, 1440:1080, 1080:1440, 1808:768, 2112:912, 1280:720, 720:1280, 
   720:720, 960:720, 720:960, 1680:720. Use 1920:1080 by default. It also accepts reference images, in the form of either a url or a base64 encoded image. 
-  Each reference image has a tag, which is a string that refers to the image from the user prompt. For example, if the user prompt is "<IMG_1> on a red background", 
-  and the reference image has the tag "<IMG_1>", the model will use that reference image to generate the image. The return of this function will contain a url to the generated image.`,
+  Each reference image has a tag, which is a string that refers to the image from the user prompt. For example, if the user prompt is "IMG_1 on a red background", 
+  and the reference image has the tag "IMG_1", the model will use that reference image to generate the image. The return of this function will contain a url to the generated image.`,
   {
     promptText: z.string(),
     ratio: z.string(),
@@ -130,12 +130,12 @@ server.tool(
 // 3. Upscale a video
 server.tool(
   "runway_upscaleVideo",
-  "Upscale a video to a higher resolution",
-  { taskId: z.string(), model: z.string().optional() },
-  async ({ taskId, model }) => {
-    const task = await callRunwayAsync("/upscale_video", {
+  "Upscale a video to a higher resolution. videoUri takes in a url of a video or a data uri of a video.",
+  { videoUri: z.string() },
+  async ({ videoUri }) => {
+    const task = await callRunwayAsync("/video_upscale", {
       method: "POST",
-      body: JSON.stringify({ taskId, model }),
+      body: JSON.stringify({ videoUri, model: "upscale_v1" }),
     });
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
   }
@@ -155,16 +155,27 @@ server.tool(
 );
 
 // 5. Cancel/delete a task
-server.tool("runway_cancelTask", { taskId: z.string() }, async ({ taskId }) => {
-  await callRunway(`/tasks/${taskId}`, { method: "DELETE" });
-  return { content: [{ type: "text", text: `Task ${taskId} cancelled.` }] };
-});
+server.tool(
+  "runway_cancelTask",
+  "Deletes or cancels a given task. ",
+  { taskId: z.string() },
+  async ({ taskId }) => {
+    await callRunway(`/tasks/${taskId}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: `Task ${taskId} cancelled.` }] };
+  }
+);
 
 // 6. Get organization info
-server.tool("runway_getOrg", {}, async () => {
-  const org = await callRunway("/org");
-  return { content: [{ type: "text", text: JSON.stringify(org) }] };
-});
+server.tool(
+  "runway_getOrg",
+  "Returns details like credit balance, usage details, and organization information.",
+  {},
+  async () => {
+    const org = await callRunway("/organization");
+    console.log("org", org);
+    return { content: [{ type: "text", text: JSON.stringify(org) }] };
+  }
+);
 
 async function main() {
   const transport = new StdioServerTransport();

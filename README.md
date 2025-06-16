@@ -5,11 +5,23 @@
 
 This repository holds the code for a MCP server that calls the Runway API.
 
+## Tools
+
+The following tools are available in this MCP:
+
+| Tool Name              | Description                                                 | Parameters                                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runway_generateVideo` | Generates a video from an image and a text prompt           | - promptImage <br/> - promptText (optional) <br/> - ratio <br/> - duration                                                                                            |
+| `runway_generateImage` | Generates an image from a text prompt, and reference images | - promptText <br/> - referenceImages (note that uploaded images won't work as references, only previously generated ones, or URLs to images will work.) <br/> - ratio |
+| `runway_upscaleVideo`  | Upscale a video to a higher resolution                      | - videoUri                                                                                                                                                            |
+| `runway_getTask`       | Gets the details of a task                                  | - taskId                                                                                                                                                              |
+| `runway_cancelTask`    | Cancels or deletes a task                                   | - taskId                                                                                                                                                              |
+| `runway_getOrg`        | Get organization information                                |
+|                        |
+
 ## Prerequisites
 
 Before starting, you'll need to have setup your Developer account on the [Runway API](https://dev.runwayml.com/), [setup Billing](https://docs.dev.runwayml.com/guides/setup/), and also created an API Key.
-
-This guide is written for MacOS users only, instructions for Windows will be coming soon.
 
 You'll also need [Node.js](https://nodejs.org/) setup.
 
