@@ -42,7 +42,7 @@ async function waitForTaskCompletion(taskId: string): Promise<RunwayTask> {
       return task;
     }
     // Wait 5 seconds before next poll
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
 }
 
