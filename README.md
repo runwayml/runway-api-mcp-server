@@ -40,7 +40,7 @@ You'll also need [Node.js](https://nodejs.org/) setup.
 MacOS
 
 ```bashrc
-open ~/Library/Application Support/Claude/claude_desktop_config.json
+open ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
 Windows
