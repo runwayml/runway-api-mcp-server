@@ -51,7 +51,7 @@ notepad %APPDATA%\Claude\claude_desktop_config.json
 
 5. Add the `runway-api-mcp-server` to the config, make sure to replace the file path and Runway API key.
 
-```
+```json
 {
   "mcpServers": {
     "runway-api-mcp-server": {
