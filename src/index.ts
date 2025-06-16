@@ -10,7 +10,7 @@ const SECRET = process.env.RUNWAYML_API_SECRET!;
 
 interface RunwayTask {
   id: string;
-  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "THROTTLED";
   url?: string;
   error?: string;
   [key: string]: any; // for other task-specific fields
@@ -38,7 +38,7 @@ async function callRunway(
 async function waitForTaskCompletion(taskId: string): Promise<RunwayTask> {
   while (true) {
     const task = (await callRunway(`/tasks/${taskId}`)) as RunwayTask;
-    if (task.status === "SUCCEEDED" || task.status === "FAILED") {
+    if (task.status === "SUCCEEDED" || task.status === "FAILED" || task.status === "CANCELLED") {
       return task;
     }
     // Wait 5 seconds before next poll
