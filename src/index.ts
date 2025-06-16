@@ -157,7 +157,7 @@ server.tool(
 // 5. Cancel/delete a task
 server.tool(
   "runway_cancelTask",
-  "Deletes or cancels a given task. ",
+  "Deletes or cancels a given task.",
   { taskId: z.string() },
   async ({ taskId }) => {
     await callRunway(`/tasks/${taskId}`, { method: "DELETE" });
