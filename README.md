@@ -1,4 +1,5 @@
-<video src="demo.mp4" controls width="100%"></video>
+![Demo](demo.gif)
+
 <small>Video sped up for demo purposes</small>
 
 # Runway API MCP Server
