@@ -29,13 +29,11 @@ You'll also need [Node.js](https://nodejs.org/) setup.
 
 1. Clone this repository and save it to a folder on your computer. Remember where you saved this folder because you'll need it in a later step.
 
-2. Duplicate `.env.example` and save it as `.env`. Update `RUNWAYML_API_SECRET` with your API key that you got from the [Runway API](https://dev.runwayml.com/).
-
-3. Run `npm install` in the folder, then `npm run build`. You should now see a new folder called `build` with a `index.js` file inside.
+2. Run `npm install` in the folder, then `npm run build`. You should now see a new folder called `build` with a `index.js` file inside.
 
 ### Using the MCP with Claude Desktop
 
-4. Follow the [MCP quickstart instructions](https://modelcontextprotocol.io/quickstart/user#2-add-the-filesystem-mcp-server) to setup a config file for Claude. If you already have it, open it by running:
+3. Follow the [MCP quickstart instructions](https://modelcontextprotocol.io/quickstart/user#2-add-the-filesystem-mcp-server) to setup a config file for Claude. If you already have it, open it by running:
 
 MacOS
 
@@ -49,7 +47,7 @@ Windows
 notepad %APPDATA%\Claude\claude_desktop_config.json
 ```
 
-5. Add the `runway-api-mcp-server` to the config, make sure to replace the file path and Runway API key.
+4. Add the `runway-api-mcp-server` to the config, make sure to replace the file path and Runway API key.
 
 ```
 {

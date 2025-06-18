@@ -172,7 +172,6 @@ server.tool(
   {},
   async () => {
     const org = await callRunway("/organization");
-    console.log("org", org);
     return { content: [{ type: "text", text: JSON.stringify(org) }] };
   }
 );
