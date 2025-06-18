@@ -39,7 +39,7 @@ You'll also need [Node.js](https://nodejs.org/) setup.
 MacOS
 
 ```bashrc
-open ~/Library/Application Support/Claude/claude_desktop_config.json
+open ~/Library/Application\ Support/Claude/claude_desktop_config.json
 ```
 
 Windows
@@ -50,7 +50,7 @@ notepad %APPDATA%\Claude\claude_desktop_config.json
 
 4. Add the `runway-api-mcp-server` to the config, make sure to replace the file path and Runway API key.
 
-```
+```json
 {
   "mcpServers": {
     "runway-api-mcp-server": {

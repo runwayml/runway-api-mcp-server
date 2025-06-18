@@ -1,5 +1,5 @@
 import "dotenv/config";
-import fetch, { RequestInit, Response } from "node-fetch";
+import fetch, { RequestInit } from "node-fetch";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -10,7 +10,7 @@ const SECRET = process.env.RUNWAYML_API_SECRET!;
 
 interface RunwayTask {
   id: string;
-  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "THROTTLED";
   url?: string;
   error?: string;
   [key: string]: any; // for other task-specific fields
@@ -38,11 +38,11 @@ async function callRunway(
 async function waitForTaskCompletion(taskId: string): Promise<RunwayTask> {
   while (true) {
     const task = (await callRunway(`/tasks/${taskId}`)) as RunwayTask;
-    if (task.status === "SUCCEEDED" || task.status === "FAILED") {
+    if (task.status === "SUCCEEDED" || task.status === "FAILED" || task.status === "CANCELLED") {
       return task;
     }
     // Wait 5 seconds before next poll
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
 }
 
@@ -144,7 +144,7 @@ server.tool(
 // 4. Get task detail
 server.tool(
   "runway_getTask",
-  "Get the details of a task, if the task status is 'SUCCEEDED', there will be a 'url' field in the response. If the task status is 'FAILED', there will be a 'error' field in the response. If the task status is 'PENDING' or 'RUNNING', you can call this tool again in 5 secondsto get the task details.",
+  "Get the details of a task, if the task status is 'SUCCEEDED', there will be a 'url' field in the response. If the task status is 'FAILED', there will be a 'error' field in the response. If the task status is 'PENDING' or 'RUNNING', you can call this tool again in 5 seconds to get the task details.",
   {
     taskId: z.string(),
   },
@@ -157,7 +157,7 @@ server.tool(
 // 5. Cancel/delete a task
 server.tool(
   "runway_cancelTask",
-  "Deletes or cancels a given task. ",
+  "Deletes or cancels a given task.",
   { taskId: z.string() },
   async ({ taskId }) => {
     await callRunway(`/tasks/${taskId}`, { method: "DELETE" });
