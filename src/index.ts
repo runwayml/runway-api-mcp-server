@@ -10,7 +10,13 @@ const SECRET = process.env.RUNWAYML_API_SECRET!;
 
 interface RunwayTask {
   id: string;
-  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "THROTTLED";
+  status:
+    | "PENDING"
+    | "RUNNING"
+    | "SUCCEEDED"
+    | "FAILED"
+    | "CANCELLED"
+    | "THROTTLED";
   url?: string;
   error?: string;
   [key: string]: any; // for other task-specific fields
@@ -38,7 +44,11 @@ async function callRunway(
 async function waitForTaskCompletion(taskId: string): Promise<RunwayTask> {
   while (true) {
     const task = (await callRunway(`/tasks/${taskId}`)) as RunwayTask;
-    if (task.status === "SUCCEEDED" || task.status === "FAILED" || task.status === "CANCELLED") {
+    if (
+      task.status === "SUCCEEDED" ||
+      task.status === "FAILED" ||
+      task.status === "CANCELLED"
+    ) {
       return task;
     }
     // Wait 5 seconds before next poll
@@ -141,7 +151,38 @@ server.tool(
   }
 );
 
-// 4. Get task detail
+// 4. Edit a video
+server.tool(
+  "runway_editVideo",
+  `Edit a video using Runway Aleph. promptText is a prompt for the video. videoUri takes in a url of a video or a data uri of a video. Accepted Ratio values are 1280:720, 720:1280, 1104:832, 960:960, 832:1104, 1584:672, 848:480, 640:480. Use 1280:720 by default. It also accepts reference images, in the form of either a url or a base64 encoded image. 
+Each reference image has a tag, which is a string that refers to the image from the user prompt. For example, if the user prompt is "IMG_1 on a red background", 
+and the reference image has the tag "IMG_1", the model will use that reference image to generate the image.`,
+  {
+    promptText: z.string(),
+    videoUri: z.string(),
+    ratio: z.string(),
+    referenceImages: z
+      .array(z.object({ uri: z.string(), tag: z.string().optional() }))
+      .optional(),
+  },
+  async ({ promptText, videoUri, ratio, referenceImages }) => {
+    const task = await callRunwayAsync("/video_to_video", {
+      method: "POST",
+      body: JSON.stringify({
+        promptText,
+        videoUri,
+        ratio,
+        ...(referenceImages && referenceImages.length > 0
+          ? { references: referenceImages }
+          : {}),
+        model: "gen4_aleph",
+      }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(task) }] };
+  }
+);
+
+// 5. Get task detail
 server.tool(
   "runway_getTask",
   "Get the details of a task, if the task status is 'SUCCEEDED', there will be a 'url' field in the response. If the task status is 'FAILED', there will be a 'error' field in the response. If the task status is 'PENDING' or 'RUNNING', you can call this tool again in 5 seconds to get the task details.",
@@ -154,7 +195,7 @@ server.tool(
   }
 );
 
-// 5. Cancel/delete a task
+// 6. Cancel/delete a task
 server.tool(
   "runway_cancelTask",
   "Deletes or cancels a given task.",
@@ -165,7 +206,7 @@ server.tool(
   }
 );
 
-// 6. Get organization info
+// 7. Get organization info
 server.tool(
   "runway_getOrg",
   "Returns details like credit balance, usage details, and organization information.",

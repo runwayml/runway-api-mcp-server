@@ -15,6 +15,7 @@ The following tools are available in this MCP:
 | `runway_generateVideo` | Generates a video from an image and a text prompt           | - promptImage <br/> - promptText (optional) <br/> - ratio <br/> - duration                                                                                            |
 | `runway_generateImage` | Generates an image from a text prompt, and reference images | - promptText <br/> - referenceImages (note that uploaded images won't work as references, only previously generated ones, or URLs to images will work.) <br/> - ratio |
 | `runway_upscaleVideo`  | Upscale a video to a higher resolution                      | - videoUri                                                                                                                                                            |
+| `runway_editVideo`     | Edits a video, optionally provide reference images.         | - videoUri, referenceImages, promptText                                                                                                                               |
 | `runway_getTask`       | Gets the details of a task                                  | - taskId                                                                                                                                                              |
 | `runway_cancelTask`    | Cancels or deletes a task                                   | - taskId                                                                                                                                                              |
 | `runway_getOrg`        | Get organization information                                |
@@ -55,7 +56,9 @@ notepad %APPDATA%\Claude\claude_desktop_config.json
   "mcpServers": {
     "runway-api-mcp-server": {
       "command": "node",
-      "args": ["<ABSOLUTE_PATH_TO_YOUR_CLONED_REPO_FROM_STEP_1>/build/index.js"],
+      "args": [
+        "<ABSOLUTE_PATH_TO_YOUR_CLONED_REPO_FROM_STEP_1>/build/index.js"
+      ],
       "env": {
         "RUNWAYML_API_SECRET": "<YOUR_RUNWAY_API_KEY_HERE>",
         "MCP_TOOL_TIMEOUT": "1000000"
