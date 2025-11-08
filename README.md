@@ -6,6 +6,10 @@
 
 This repository holds the code for a MCP server that calls the Runway API.
 
+<a href="https://glama.ai/mcp/servers/@runwayml/runway-api-mcp-server">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@runwayml/runway-api-mcp-server/badge" alt="Runway API Server MCP server" />
+</a>
+
 ## Tools
 
 The following tools are available in this MCP:
