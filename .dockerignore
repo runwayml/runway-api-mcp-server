@@ -1,0 +1,11 @@
+node_modules
+build
+dist-mcpb
+*.mcpb
+.git
+.env
+.env.local
+*.log
+.DS_Store
+demo.gif
+screenshot.png

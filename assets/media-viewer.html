@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Runway media</title>
+    <style>
+      :root {
+        /* Light defaults that match Claude Desktop's cream UI; the host may
+           override these via injected CSS custom properties. */
+        --bg: var(--color-background-primary, #faf9f5);
+        --fg: var(--color-text-primary, #1f1e1d);
+        --muted: var(--color-text-secondary, #6b6a66);
+        --border: var(--color-border-primary, rgba(0, 0, 0, 0.1));
+        --btn-bg: var(--color-bg-100, rgba(0, 0, 0, 0.04));
+        --btn-bg-hover: var(--color-bg-200, rgba(0, 0, 0, 0.08));
+        --btn-bg-active: var(--color-bg-300, rgba(0, 0, 0, 0.12));
+        --media-bg: rgba(0, 0, 0, 0.04);
+        --radius: 8px;
+        --font-sans: var(
+          --font-ui,
+          var(
+            --font-styrene,
+            "Söhne",
+            "ui-sans-serif",
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            Helvetica,
+            Arial,
+            sans-serif
+          )
+        );
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: var(--color-background-primary, #1f1e1d);
+          --fg: var(--color-text-primary, #faf9f5);
+          --muted: var(--color-text-secondary, #a8a6a1);
+          --border: var(--color-border-primary, rgba(255, 255, 255, 0.12));
+          --btn-bg: var(--color-bg-100, rgba(255, 255, 255, 0.06));
+          --btn-bg-hover: var(--color-bg-200, rgba(255, 255, 255, 0.1));
+          --btn-bg-active: var(--color-bg-300, rgba(255, 255, 255, 0.16));
+          --media-bg: rgba(255, 255, 255, 0.04);
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--font-sans);
+        font-size: 14px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        min-height: 200px;
+      }
+      .wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 12px;
+      }
+      .media {
+        width: 100%;
+        max-height: 70vh;
+        object-fit: contain;
+        border-radius: var(--radius);
+        background: var(--media-bg);
+        display: block;
+      }
+      .meta {
+        font-size: 13px;
+        color: var(--muted);
+        word-break: break-word;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg);
+        background: var(--btn-bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: background 0.15s ease;
+      }
+      .btn:hover {
+        background: var(--btn-bg-hover);
+      }
+      .btn:active {
+        background: var(--btn-bg-active);
+      }
+      .toast {
+        font-size: 12px;
+        color: var(--muted);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      .toast.show {
+        opacity: 1;
+      }
+      .empty {
+        padding: 24px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" class="wrap">
+      <div class="empty">Waiting for Runway result…</div>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById("root");
+        let nextId = 1000;
+        const pendingRefresh = new Map();
+        let currentPayload = null;
+        // Track whether we've already attempted a refresh for the current
+        // URL so a still-broken refresh doesn't loop forever.
+        let refreshTried = false;
+
+        function send(method, params, id) {
+          const msg = { jsonrpc: "2.0", method };
+          if (id !== undefined) msg.id = id;
+          if (params !== undefined) msg.params = params;
+          window.parent.postMessage(msg, "*");
+        }
+
+        function notifySize() {
+          const h = Math.max(
+            document.documentElement.scrollHeight,
+            document.body.scrollHeight,
+            300
+          );
+          send("ui/notifications/size-changed", {
+            width: Math.max(window.innerWidth, 320),
+            height: h,
+          });
+        }
+
+        function attachMediaHandlers() {
+          const media = root.querySelector("img, video");
+          if (!media) return;
+          const onload = () => notifySize();
+          media.addEventListener("load", onload);
+          media.addEventListener("loadeddata", onload);
+          media.addEventListener("error", onMediaError);
+        }
+
+        function onMediaError() {
+          // Likely an expired Runway signed URL. Ask the server for a fresh
+          // one via tools/call -> runway_refreshTaskUrl.
+          if (!currentPayload || !currentPayload.taskId || refreshTried) {
+            showError(
+              "This Runway asset is no longer available. It may have been deleted or the task expired."
+            );
+            return;
+          }
+          refreshTried = true;
+          showLoading("Refreshing link…");
+          const reqId = nextId++;
+          pendingRefresh.set(reqId, true);
+          send(
+            "tools/call",
+            {
+              name: "runway_refreshTaskUrl",
+              arguments: { taskId: currentPayload.taskId },
+            },
+            reqId
+          );
+        }
+
+        function showLoading(msg) {
+          root.innerHTML = `<div class="empty">${msg}</div>`;
+          notifySize();
+        }
+
+        function showError(msg) {
+          root.innerHTML = `<div class="empty">${msg}</div>`;
+          notifySize();
+        }
+
+        function render(payload) {
+          if (!payload || !payload.url || !payload.kind) {
+            showError("No media URL in tool result.");
+            return;
+          }
+          currentPayload = payload;
+          const escapedUrl = payload.url
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;");
+          const promptLine = payload.prompt
+            ? `<div class="meta">${payload.prompt
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")}</div>`
+            : "";
+          if (payload.kind === "video") {
+            root.innerHTML =
+              `<video class="media" src="${escapedUrl}" controls autoplay muted loop playsinline></video>` +
+              promptLine;
+          } else {
+            root.innerHTML =
+              `<img class="media" src="${escapedUrl}" alt="Generated image" />` +
+              promptLine;
+          }
+          attachMediaHandlers();
+          requestAnimationFrame(notifySize);
+        }
+
+        function extractPayload(result) {
+          if (!result) return null;
+          if (result.structuredContent && result.structuredContent.url) {
+            return result.structuredContent;
+          }
+          const content = result.content || [];
+          for (const c of content) {
+            if (c.type === "text" && typeof c.text === "string") {
+              try {
+                const parsed = JSON.parse(c.text);
+                if (parsed && parsed.url && parsed.kind) return parsed;
+              } catch (_) {
+                // ignore
+              }
+            }
+          }
+          return null;
+        }
+
+        const initId = nextId++;
+
+        window.addEventListener("message", (event) => {
+          const data = event.data;
+          if (!data || data.jsonrpc !== "2.0") return;
+
+          if (data.method === "ui/notifications/tool-result") {
+            const result =
+              data.params && data.params.result
+                ? data.params.result
+                : data.params;
+            // Reset the refresh guard whenever a fresh tool result arrives.
+            refreshTried = false;
+            const payload = extractPayload(result);
+            if (payload) render(payload);
+            return;
+          }
+
+          if (data.id === initId && data.result) {
+            send("ui/notifications/initialized");
+            return;
+          }
+
+          // Response to a tools/call we sent (URL refresh).
+          if (pendingRefresh.has(data.id)) {
+            pendingRefresh.delete(data.id);
+            if (data.error) {
+              showError(
+                "Couldn't refresh the asset URL. The Runway task may have been deleted."
+              );
+              return;
+            }
+            const payload = extractPayload(data.result);
+            if (payload) {
+              // Keep the original taskId/prompt so future refreshes still work.
+              const merged = Object.assign({}, currentPayload || {}, payload);
+              render(merged);
+            } else {
+              showError("Refresh returned no usable URL.");
+            }
+          }
+        });
+
+        send(
+          "ui/initialize",
+          {
+            protocolVersion: "2026-01-26",
+            appCapabilities: {},
+            appInfo: { name: "runway-media-viewer", version: "1.0.0" },
+          },
+          initId
+        );
+
+        send("ui/notifications/size-changed", {
+          width: Math.max(window.innerWidth, 320),
+          height: 220,
+        });
+      })();
+    </script>
+  </body>
+</html>
