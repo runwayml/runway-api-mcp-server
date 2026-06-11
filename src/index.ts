@@ -72,24 +72,39 @@ async function callRunwayAsync(
 }
 
 // 1. Generate video from image
+const VIDEO_MODELS = [
+  "gen3a_turbo", "gen4_turbo", "gen4", "gen4.5",
+  "kling2.5_turbo_pro", "kling3.0_pro", "kling3.0_4k", "kling3.0_standard",
+  "klingO3_pro", "klingO3_standard", "klingO3_4k",
+  "veo3", "veo3.1", "veo3.1_fast",
+  "seedance2", "seedance2_fast",
+] as const;
 server.tool(
   "runway_generateVideo",
-  "Generate a video from an image and a text prompt. Accepted ratios are 1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672. Use 1280:720 by default. For duration, there are only either 5 or 10 seconds. Use 5 seconds by default. If the user asks to generate a video, always first use generateImage to generate an image first, then use the image to generate a video.",
+  `Generate a video from an image and a text prompt. Default model is gen4_turbo (ratios 1280:720, 720:1280, 1104:832, 832:1104, 960:960, 1584:672; duration 5 or 10).
+Other models: seedance2 / seedance2_fast (ByteDance Seedance 2.0 — duration 4-15s, ratios include 1920:1080, 1280:720, 720:1280, 960:960, 1470:630, 2206:946; supports audio:true for native sound and lip-synced dialogue — put spoken lines in quotes inside promptText), veo3/veo3.1 (native audio), kling3.0 and gen4.5 families.
+If the user asks to generate a video, first use runway_generateImage to create a keyframe, then animate it.`,
   {
     promptImage: z.string(),
     promptText: z.string().optional(),
     ratio: z.string(),
     duration: z.number(),
+    model: z.enum(VIDEO_MODELS).optional(),
+    audio: z
+      .boolean()
+      .optional()
+      .describe("Generate native audio (seedance2, veo3 family)"),
   },
   async (params) => {
     const task = await callRunwayAsync("/image_to_video", {
       method: "POST",
       body: JSON.stringify({
-        model: "gen4_turbo",
+        model: params.model ?? "gen4_turbo",
         promptImage: params.promptImage,
         promptText: params.promptText,
         ratio: params.ratio,
         duration: params.duration,
+        ...(params.audio !== undefined ? { audio: params.audio } : {}),
       }),
     });
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
@@ -110,12 +125,25 @@ server.tool(
     referenceImages: z
       .array(z.object({ uri: z.string(), tag: z.string().optional() }))
       .optional(),
+    model: z
+      .enum([
+        "gen4_image",
+        "gen4_image_turbo",
+        "gemini_2.5_flash",
+        "gemini_image3.1_flash",
+        "gemini_image3_pro",
+        "gpt_image_2",
+      ])
+      .optional()
+      .describe(
+        "Default gen4_image. gemini_image3_pro = Nano Banana 2/Pro, gemini_2.5_flash = Nano Banana 1. NOTE: gemini family uses its own ratio set (e.g. 1344:768, 768:1344, 1024:1024, 2048:2048, 3168:1344) — NOT the gen4 ratios."
+      ),
   },
-  async ({ promptText, ratio, referenceImages }) => {
+  async ({ promptText, ratio, referenceImages, model }) => {
     const task = await callRunwayAsync("/text_to_image", {
       method: "POST",
       body: JSON.stringify({
-        model: "gen4_image",
+        model: model ?? "gen4_image",
         promptText,
         ratio,
         referenceImages,
@@ -179,6 +207,80 @@ and the reference image has the tag "IMG_1", the model will use that reference i
       }),
     });
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
+  }
+);
+
+// 4b. Text to speech (ElevenLabs via Runway)
+server.tool(
+  "runway_textToSpeech",
+  "Generate speech audio from text using ElevenLabs (eleven_multilingual_v2). Use voicePresetId for a Runway preset voice (e.g. 'James'), or list available voices with runway_listVoices and pass a voiceId.",
+  {
+    promptText: z.string(),
+    voicePresetId: z.string().optional(),
+    voiceId: z.string().optional(),
+  },
+  async ({ promptText, voicePresetId, voiceId }) => {
+    const voice = voiceId
+      ? { type: "id", voiceId }
+      : { type: "runway-preset", presetId: voicePresetId ?? "James" };
+    const task = await callRunwayAsync("/text_to_speech", {
+      method: "POST",
+      body: JSON.stringify({ model: "eleven_multilingual_v2", promptText, voice }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(task) }] };
+  }
+);
+
+// 4c. Sound effects / music (ElevenLabs via Runway)
+server.tool(
+  "runway_soundEffect",
+  "Generate a sound effect or short music cue from a text description (eleven_text_to_sound_v2). promptDuration is in seconds (max ~22).",
+  {
+    promptText: z.string(),
+    promptDuration: z.number().optional(),
+  },
+  async ({ promptText, promptDuration }) => {
+    const task = await callRunwayAsync("/sound_effect", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "eleven_text_to_sound_v2",
+        promptText,
+        ...(promptDuration ? { promptDuration } : {}),
+      }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(task) }] };
+  }
+);
+
+// 4d. Avatar video (talking head from speech audio)
+server.tool(
+  "runway_avatarVideo",
+  "Generate a lip-synced talking-avatar video (gwm1_avatars) from a speech audio asset. avatarPresetId is a Runway preset (e.g. 'influencer'); speechAudioUri is a URL or data URI of the speech audio.",
+  {
+    avatarPresetId: z.string(),
+    speechAudioUri: z.string(),
+  },
+  async ({ avatarPresetId, speechAudioUri }) => {
+    const task = await callRunwayAsync("/avatar_videos", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gwm1_avatars",
+        avatar: { type: "runway-preset", presetId: avatarPresetId },
+        speech: { type: "audio", audio: speechAudioUri },
+      }),
+    });
+    return { content: [{ type: "text", text: JSON.stringify(task) }] };
+  }
+);
+
+// 4e. List available TTS voices
+server.tool(
+  "runway_listVoices",
+  "List available text-to-speech voices (GET /voices).",
+  {},
+  async () => {
+    const voices = await callRunway("/voices");
+    return { content: [{ type: "text", text: JSON.stringify(voices) }] };
   }
 );
 
