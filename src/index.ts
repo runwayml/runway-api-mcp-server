@@ -234,18 +234,18 @@ server.tool(
 // 4c. Sound effects / music (ElevenLabs via Runway)
 server.tool(
   "runway_soundEffect",
-  "Generate a sound effect or short music cue from a text description (eleven_text_to_sound_v2). promptDuration is in seconds (max ~22).",
+  "Generate a sound effect or music cue from a text description (eleven_text_to_sound_v2). duration is in seconds (e.g. 22). NOTE: the API param is `duration` — `promptDuration` is silently ignored.",
   {
     promptText: z.string(),
-    promptDuration: z.number().optional(),
+    duration: z.number().optional(),
   },
-  async ({ promptText, promptDuration }) => {
+  async ({ promptText, duration }) => {
     const task = await callRunwayAsync("/sound_effect", {
       method: "POST",
       body: JSON.stringify({
         model: "eleven_text_to_sound_v2",
         promptText,
-        ...(promptDuration ? { promptDuration } : {}),
+        ...(duration ? { duration } : {}),
       }),
     });
     return { content: [{ type: "text", text: JSON.stringify(task) }] };
