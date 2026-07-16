@@ -12,14 +12,23 @@ The following tools are available in this MCP:
 
 | Tool Name              | Description                                                 | Parameters                                                                                                                                                            |
 | ---------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `runway_generateVideo` | Generates a video from an image and a text prompt           | - promptImage <br/> - promptText (optional) <br/> - ratio <br/> - duration                                                                                            |
-| `runway_generateImage` | Generates an image from a text prompt, and reference images | - promptText <br/> - referenceImages (note that uploaded images won't work as references, only previously generated ones, or URLs to images will work.) <br/> - ratio |
-| `runway_upscaleVideo`  | Upscale a video to a higher resolution                      | - videoUri                                                                                                                                                            |
-| `runway_editVideo`     | Edits a video, optionally provide reference images.         | - videoUri, referenceImages, promptText                                                                                                                               |
+| `runway_listModels`    | Lists available models per capability and the recommended default for each | (none) |
+| `runway_generateVideo` | Generates a video from an image and a text prompt           | - promptImage <br/> - promptText (optional) <br/> - ratio <br/> - duration <br/> - model (optional)                                                                   |
+| `runway_generateImage` | Generates an image from a text prompt, and reference images | - promptText <br/> - referenceImages (note that uploaded images won't work as references, only previously generated ones, or URLs to images will work.) <br/> - ratio <br/> - model (optional) |
+| `runway_upscaleVideo`  | Upscale a video to a higher resolution                      | - videoUri <br/> - model (optional)                                                                                                                                   |
+| `runway_editVideo`     | Edits a video, optionally provide reference images.         | - videoUri, referenceImages, promptText <br/> - model (optional)                                                                                                      |
+| `runway_generateAudio` | Generates spoken audio (text-to-speech) from text            | - promptText <br/> - voice (optional) <br/> - model (optional)                                                                                                        |
 | `runway_getTask`       | Gets the details of a task                                  | - taskId                                                                                                                                                              |
 | `runway_cancelTask`    | Cancels or deletes a task                                   | - taskId                                                                                                                                                              |
 | `runway_getOrg`        | Get organization information                                |
 |                        |
+
+Generation tools accept an optional `model` parameter to override the recommended
+default. Recommended models: Nano Banana Pro (`gemini_image3_pro`) for images, Seedance
+(`seedance2`) for video, and Aleph (`aleph2`) for video editing. Valid `ratio`,
+`duration`, and other parameter values are model-specific, so `runway_listModels` returns
+the exact valid values and required parameters for every model — call it before choosing a
+`ratio`/`duration`.
 
 ## Prerequisites
 
