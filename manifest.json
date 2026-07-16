@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "runway-api-mcp-server",
+  "display_name": "Runway",
+  "version": "1.0.0",
+  "description": "Generate, edit, and upscale images and videos with Runway, with inline previews in the chat.",
+  "long_description": "Calls the Runway API for image generation (gen4_image), video generation (gen4_turbo), video editing (gen4_aleph), and video upscaling. Results are rendered inline in the Claude Desktop chat via an MCP App UI viewer with a Download button.",
+  "icon": "assets/runway-logo.png",
+  "author": {
+    "name": "Runway"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "build/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/build/index.js"],
+      "env": {
+        "RUNWAYML_API_SECRET": "${user_config.runwayml_api_secret}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "runway_generateImage", "description": "Generate an image from a text prompt." },
+    { "name": "runway_generateVideo", "description": "Generate a video from an image and a text prompt." },
+    { "name": "runway_editVideo", "description": "Edit a video using Runway Aleph." },
+    { "name": "runway_upscaleVideo", "description": "Upscale a video to a higher resolution." },
+    { "name": "runway_getTask", "description": "Get the details of a Runway task." },
+    { "name": "runway_refreshTaskUrl", "description": "Get a fresh download URL for a previously generated Runway task." },
+    { "name": "runway_cancelTask", "description": "Cancel or delete a Runway task." },
+    { "name": "runway_getOrg", "description": "Get organization info including credit balance." }
+  ],
+  "user_config": {
+    "runwayml_api_secret": {
+      "type": "string",
+      "title": "Runway API key",
+      "description": "Your Runway API secret (key_...). Get one at https://dev.runwayml.com.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

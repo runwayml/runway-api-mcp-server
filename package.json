@@ -7,12 +7,20 @@
     "runway-api-mcp-server": "./build/index.js"
   },
   "scripts": {
-    "start": "tsx src/index.ts",
-    "build": "tsc && chmod 755 build/index.js",
+    "start": "node build/http.js",
+    "start:stdio": "tsx src/index.ts",
+    "start:http": "tsx src/http.ts",
+    "build": "tsc && chmod 755 build/index.js && chmod 755 build/http.js",
+    "serve:http": "node build/http.js",
+    "package": "npm run build && rm -rf dist-mcpb && mkdir -p dist-mcpb && cp manifest.json dist-mcpb/ && cp -r build dist-mcpb/build && cp -r assets dist-mcpb/assets && cp package.json package-lock.json dist-mcpb/ && (cd dist-mcpb && npm install --omit=dev --ignore-scripts --silent) && mcpb pack \"$PWD/dist-mcpb\" \"$PWD/runway.mcpb\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "files": [
-    "build"
+    "build",
+    "assets"
   ],
   "keywords": [],
   "author": "",
@@ -20,11 +28,16 @@
   "description": "",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "cors": "^2.8.6",
     "dotenv": "^16.5.0",
+    "express": "^5.2.1",
     "node-fetch": "^3.3.2",
     "zod": "^3.25.63"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^24.0.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.1",
