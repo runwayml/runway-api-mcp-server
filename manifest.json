@@ -16,7 +16,8 @@
       "command": "node",
       "args": ["${__dirname}/build/index.js"],
       "env": {
-        "RUNWAYML_API_SECRET": "${user_config.runwayml_api_secret}"
+        "RUNWAYML_API_SECRET": "${user_config.runwayml_api_secret}",
+        "MCP_TOOL_TIMEOUT": "${user_config.mcp_tool_timeout}"
       }
     }
   },
@@ -37,6 +38,13 @@
       "description": "Your Runway API secret (key_...). Get one at https://dev.runwayml.com.",
       "sensitive": true,
       "required": true
+    },
+    "mcp_tool_timeout": {
+      "type": "number",
+      "title": "Tool timeout (ms)",
+      "description": "How long Claude waits for a tool to finish before timing out. Runway generations can take a while, so this defaults to 1000000 ms (~16 min).",
+      "default": 1000000,
+      "required": false
     }
   },
   "compatibility": {
