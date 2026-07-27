@@ -11,6 +11,7 @@
     "start:stdio": "tsx src/index.ts",
     "start:http": "tsx src/http.ts",
     "build": "tsc && chmod 755 build/index.js && chmod 755 build/http.js",
+    "generate:constraints": "node scripts/generate-constraints.mjs",
     "serve:http": "node build/http.js",
     "package": "npm run build && rm -rf dist-mcpb && mkdir -p dist-mcpb && cp manifest.json dist-mcpb/ && cp -r build dist-mcpb/build && cp -r assets dist-mcpb/assets && cp package.json package-lock.json dist-mcpb/ && (cd dist-mcpb && npm install --omit=dev --ignore-scripts --silent) && mcpb pack \"$PWD/dist-mcpb\" \"$PWD/runway.mcpb\"",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -27,7 +28,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "cors": "^2.8.6",

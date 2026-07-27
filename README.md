@@ -30,6 +30,11 @@ default. Recommended models: Nano Banana Pro (`gemini_image3_pro`) for images, S
 the exact valid values and required parameters for every model — call it before choosing a
 `ratio`/`duration`.
 
+Before any generation request is sent to the Runway API, the server validates the payload
+against OpenAPI-derived per-model constraints (allowed enums, numeric ranges, string
+lengths, required fields). Invalid payloads fail locally with a readable error and never
+hit the network.
+
 ## Prerequisites
 
 Before starting, you'll need to have setup your Developer account on the [Runway API](https://dev.runwayml.com/), [setup Billing](https://docs.dev.runwayml.com/guides/setup/), and also created an API Key.

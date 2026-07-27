@@ -119,6 +119,20 @@
         color: var(--muted);
         font-size: 13px;
       }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        margin: 0 auto 12px;
+        border: 2px solid var(--border);
+        border-top-color: var(--fg);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
     </style>
   </head>
   <body>
@@ -130,11 +144,17 @@
       (function () {
         const root = document.getElementById("root");
         let nextId = 1000;
-        const pendingRefresh = new Map();
+        const pendingCalls = new Map();
         let currentPayload = null;
         // Track whether we've already attempted a refresh for the current
         // URL so a still-broken refresh doesn't loop forever.
         let refreshTried = false;
+        let pollTimer = null;
+        let pollInFlight = false;
+        let pollAttempts = 0;
+        const MAX_POLL_ATTEMPTS = 120; // ~10 min at 5s cadence
+        const POLL_INTERVAL_MS = 5000;
+        const FIRST_POLL_DELAY_MS = 2500;
 
         function send(method, params, id) {
           const msg = { jsonrpc: "2.0", method };
@@ -175,26 +195,136 @@
           }
           refreshTried = true;
           showLoading("Refreshing link…");
+          callTool("runway_refreshTaskUrl", { taskId: currentPayload.taskId }, "refresh");
+        }
+
+        function callTool(name, args, kind) {
           const reqId = nextId++;
-          pendingRefresh.set(reqId, true);
-          send(
-            "tools/call",
-            {
-              name: "runway_refreshTaskUrl",
-              arguments: { taskId: currentPayload.taskId },
-            },
-            reqId
-          );
+          pendingCalls.set(reqId, kind);
+          send("tools/call", { name, arguments: args }, reqId);
+          return reqId;
         }
 
         function showLoading(msg) {
-          root.innerHTML = `<div class="empty">${msg}</div>`;
+          root.innerHTML =
+            `<div class="empty"><div class="spinner" aria-hidden="true"></div>${msg}</div>`;
           notifySize();
         }
 
         function showError(msg) {
+          stopPolling();
           root.innerHTML = `<div class="empty">${msg}</div>`;
           notifySize();
+        }
+
+        function stopPolling() {
+          if (pollTimer) {
+            clearTimeout(pollTimer);
+            pollTimer = null;
+          }
+          pollInFlight = false;
+        }
+
+        function isPendingStatus(status) {
+          return (
+            status === "PENDING" ||
+            status === "RUNNING" ||
+            status === "THROTTLED" ||
+            status === "pending" ||
+            !status
+          );
+        }
+
+        function startPolling(taskId) {
+          stopPolling();
+          pollAttempts = 0;
+          currentPayload = Object.assign({}, currentPayload || {}, {
+            taskId,
+            status: (currentPayload && currentPayload.status) || "PENDING",
+          });
+          const kindLabel =
+            currentPayload.kind === "video"
+              ? "video"
+              : currentPayload.kind === "audio"
+                ? "audio"
+                : "image";
+          showLoading(`Generating ${kindLabel}…`);
+          schedulePoll(FIRST_POLL_DELAY_MS);
+        }
+
+        function schedulePoll(delay) {
+          if (pollTimer) clearTimeout(pollTimer);
+          pollTimer = setTimeout(pollOnce, delay);
+        }
+
+        function pollOnce() {
+          if (!currentPayload || !currentPayload.taskId) return;
+          if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+            showError(
+              "Still generating after a long wait. Ask Claude to call runway_getTask with this taskId, or check Runway directly."
+            );
+            return;
+          }
+          if (pollInFlight) {
+            schedulePoll(POLL_INTERVAL_MS);
+            return;
+          }
+          pollInFlight = true;
+          pollAttempts += 1;
+          const kindLabel =
+            currentPayload.kind === "video"
+              ? "video"
+              : currentPayload.kind === "audio"
+                ? "audio"
+                : "image";
+          showLoading(
+            `Generating ${kindLabel}… (check ${pollAttempts})`
+          );
+          callTool(
+            "runway_getTask",
+            { taskId: currentPayload.taskId },
+            "poll"
+          );
+        }
+
+        function handlePollResult(result) {
+          pollInFlight = false;
+          const payload = extractPayload(result);
+          const merged = Object.assign({}, currentPayload || {}, payload || {});
+          const status = merged.status;
+          const taskId = merged.taskId || (currentPayload && currentPayload.taskId);
+
+          if (payload && payload.url && (status === "SUCCEEDED" || !status)) {
+            stopPolling();
+            refreshTried = false;
+            render(merged);
+            return;
+          }
+
+          if (status === "FAILED" || status === "CANCELLED") {
+            showError(
+              merged.error
+                ? `Generation ${String(status).toLowerCase()}: ${merged.error}`
+                : `Generation ${String(status).toLowerCase()}.`
+            );
+            return;
+          }
+
+          if (taskId && isPendingStatus(status)) {
+            currentPayload = merged;
+            schedulePoll(POLL_INTERVAL_MS);
+            return;
+          }
+
+          // Unexpected shape — keep trying if we still have a taskId.
+          if (taskId) {
+            schedulePoll(POLL_INTERVAL_MS);
+            return;
+          }
+
+          showError(
+            "Could not read task status from the poll response. Ask Claude to call runway_getTask with the taskId."
+          );
         }
 
         function render(payload) {
@@ -202,14 +332,27 @@
             showError("No media URL in tool result.");
             return;
           }
+          if (payload.kind === "audio") {
+            // Audio has no visual player in this widget; show a clear ready state.
+            currentPayload = payload;
+            stopPolling();
+            const promptLine = payload.prompt
+              ? `<div class="meta">${escapeHtml(payload.prompt)}</div>`
+              : "";
+            root.innerHTML =
+              `<div class="empty">Audio ready.</div>` +
+              promptLine +
+              `<div class="actions"><a class="btn" href="${escapeAttr(
+                payload.url
+              )}" target="_blank" rel="noopener">Download audio</a></div>`;
+            notifySize();
+            return;
+          }
           currentPayload = payload;
-          const escapedUrl = payload.url
-            .replace(/&/g, "&amp;")
-            .replace(/"/g, "&quot;");
+          stopPolling();
+          const escapedUrl = escapeAttr(payload.url);
           const promptLine = payload.prompt
-            ? `<div class="meta">${payload.prompt
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")}</div>`
+            ? `<div class="meta">${escapeHtml(payload.prompt)}</div>`
             : "";
           if (payload.kind === "video") {
             root.innerHTML =
@@ -224,26 +367,161 @@
           requestAnimationFrame(notifySize);
         }
 
+        function escapeHtml(s) {
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        }
+
+        function escapeAttr(s) {
+          return String(s)
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/</g, "&lt;");
+        }
+
+        function extractFromProse(text) {
+          // Claude Desktop sometimes strips structuredContent and only forwards
+          // the human-readable content[] text to the iframe. Recover the media
+          // URL from the markdown download link we always include in that text.
+          const link = text.match(
+            /\[Download (image|video|audio)\]\((https?:\/\/[^)\s]+)\)/i
+          );
+          if (link) {
+            const taskMatch = text.match(
+              /taskId[=:\s"]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+            );
+            return {
+              kind: link[1].toLowerCase(),
+              url: link[2],
+              status: "SUCCEEDED",
+              taskId: taskMatch ? taskMatch[1] : undefined,
+            };
+          }
+          // Pending submit text: "Video generation submitted (taskId: UUID, status: PENDING)."
+          const pending = text.match(
+            /(Image|Video|Audio) generation submitted \(taskId:\s*([0-9a-f-]{36})/i
+          );
+          if (pending) {
+            return {
+              kind: pending[1].toLowerCase(),
+              taskId: pending[2],
+              status: "PENDING",
+            };
+          }
+          const still = text.match(
+            /Task\s+([0-9a-f-]{36})\s+is still\s+(PENDING|RUNNING|THROTTLED)/i
+          );
+          if (still) {
+            return { taskId: still[1], status: still[2].toUpperCase() };
+          }
+          return null;
+        }
+
         function extractPayload(result) {
           if (!result) return null;
-          if (result.structuredContent && result.structuredContent.url) {
-            return result.structuredContent;
+          if (result.structuredContent) {
+            const sc = result.structuredContent;
+            if (sc.url || sc.taskId || sc.status) return sc;
+          }
+          // Some hosts nest the tool result under .result
+          if (result.result && result.result !== result) {
+            const nested = extractPayload(result.result);
+            if (nested) return nested;
           }
           const content = result.content || [];
           for (const c of content) {
             if (c.type === "text" && typeof c.text === "string") {
               try {
                 const parsed = JSON.parse(c.text);
-                if (parsed && parsed.url && parsed.kind) return parsed;
+                if (
+                  parsed &&
+                  (parsed.url || parsed.taskId || parsed.status || parsed.id)
+                ) {
+                  // Raw Runway task JSON from older getTask responses.
+                  if (parsed.id && !parsed.taskId) {
+                    parsed.taskId = parsed.id;
+                  }
+                  if (
+                    parsed.status === "SUCCEEDED" &&
+                    parsed.output &&
+                    parsed.output[0] &&
+                    !parsed.url
+                  ) {
+                    parsed.url = parsed.output[0];
+                    if (!parsed.kind) {
+                      parsed.kind = /\.(mp4|webm|mov)(\?|$)/i.test(parsed.url)
+                        ? "video"
+                        : /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(parsed.url)
+                          ? "audio"
+                          : "image";
+                    }
+                  }
+                  return parsed;
+                }
               } catch (_) {
-                // ignore
+                // not JSON — try scraping the prose fallback below
               }
+              const fromProse = extractFromProse(c.text);
+              if (fromProse) return fromProse;
             }
           }
+          // Whole params object might itself be the structured payload
+          if (result.url || result.taskId || result.status) return result;
           return null;
         }
 
+        function handleToolResultPayload(payload) {
+          if (!payload) {
+            showError(
+              "The generation finished but returned no media to display. It may have failed or been moderated — check the chat message, or call runway_getTask with the taskId."
+            );
+            return;
+          }
+          // Ready media
+          if (payload.url && payload.kind) {
+            refreshTried = false;
+            render(payload);
+            return;
+          }
+          // Async submit / still running — poll until ready.
+          if (payload.taskId && isPendingStatus(payload.status)) {
+            currentPayload = Object.assign({}, currentPayload || {}, payload);
+            startPolling(payload.taskId);
+            return;
+          }
+          if (payload.status === "FAILED" || payload.status === "CANCELLED") {
+            showError(
+              payload.error
+                ? `Generation ${String(payload.status).toLowerCase()}: ${payload.error}`
+                : `Generation ${String(payload.status).toLowerCase()}.`
+            );
+            return;
+          }
+          showError(
+            "The generation finished but returned no media to display. It may have failed or been moderated — check the chat message, or call runway_getTask with the taskId."
+          );
+        }
+
         const initId = nextId++;
+
+        // Pull a render payload out of the ui/initialize response. A host may
+        // replay the last tool result via hostContext when a view (re)mounts
+        // after the tool already finished — e.g. when the assistant message is
+        // finalized, or the chat is scrolled and the iframe is recreated.
+        // Without this, a recreated view sits on "Waiting…" forever because the
+        // one-shot tool-result notification already went to the prior instance.
+        function extractFromInit(result) {
+          if (!result) return null;
+          const ctx = result.hostContext || {};
+          return (
+            extractPayload(result.toolResult) ||
+            extractPayload(ctx.toolResult) ||
+            extractPayload(ctx.toolOutput) ||
+            extractPayload(result)
+          );
+        }
 
         window.addEventListener("message", (event) => {
           const data = event.data;
@@ -254,30 +532,58 @@
               data.params && data.params.result
                 ? data.params.result
                 : data.params;
-            // Reset the refresh guard whenever a fresh tool result arrives.
             refreshTried = false;
-            const payload = extractPayload(result);
-            if (payload) render(payload);
+            handleToolResultPayload(extractPayload(result));
+            return;
+          }
+
+          // Host cancelled / timed out the original tool call. Generation tools
+          // now return immediately, so this usually means the submit itself was
+          // cancelled. If we already have a taskId (partial result / remount),
+          // keep polling — the Runway job may still complete.
+          if (data.method === "ui/notifications/tool-cancelled") {
+            if (currentPayload && currentPayload.taskId && !currentPayload.url) {
+              startPolling(currentPayload.taskId);
+              return;
+            }
+            showError(
+              "The Runway request was cancelled or timed out before a taskId was returned. Ask again — if a taskId appeared in the chat, call runway_getTask with it instead of starting a new generation."
+            );
             return;
           }
 
           if (data.id === initId && data.result) {
             send("ui/notifications/initialized");
+            // If the host replayed a prior result on (re)mount, render/poll it.
+            if (!currentPayload || !currentPayload.url) {
+              const payload = extractFromInit(data.result);
+              if (payload) handleToolResultPayload(payload);
+            }
             return;
           }
 
-          // Response to a tools/call we sent (URL refresh).
-          if (pendingRefresh.has(data.id)) {
-            pendingRefresh.delete(data.id);
+          // Response to a tools/call we sent (poll or URL refresh).
+          if (pendingCalls.has(data.id)) {
+            const kind = pendingCalls.get(data.id);
+            pendingCalls.delete(data.id);
             if (data.error) {
+              if (kind === "poll") {
+                pollInFlight = false;
+                // Transient host/tool errors — keep trying.
+                schedulePoll(POLL_INTERVAL_MS);
+                return;
+              }
               showError(
                 "Couldn't refresh the asset URL. The Runway task may have been deleted."
               );
               return;
             }
+            if (kind === "poll") {
+              handlePollResult(data.result);
+              return;
+            }
             const payload = extractPayload(data.result);
-            if (payload) {
-              // Keep the original taskId/prompt so future refreshes still work.
+            if (payload && payload.url) {
               const merged = Object.assign({}, currentPayload || {}, payload);
               render(merged);
             } else {
@@ -291,7 +597,7 @@
           {
             protocolVersion: "2026-01-26",
             appCapabilities: {},
-            appInfo: { name: "runway-media-viewer", version: "1.0.0" },
+            appInfo: { name: "runway-media-viewer", version: "1.1.0" },
           },
           initId
         );

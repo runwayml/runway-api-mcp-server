@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validatePayload, modelIdsForPath } from "./linter/validate-payload.js";
 
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const API_BASE = "https://api.dev.runwayml.com/v1";
@@ -398,6 +399,25 @@ const MODELS: readonly ModelCatalogEntry[] = [
   },
 ];
 
+/**
+ * Builds an optional `model` enum for a generation tool from the OpenAPI-derived
+ * constraint tables, so invalid model IDs are rejected at the schema boundary
+ * (before validatePayload or any network call). The enum is ordered with the
+ * recommended model first, and omitting the field falls back to `recommended`.
+ */
+function modelPicker(endpointPath: string, recommended: string) {
+  const ids = modelIdsForPath(endpointPath, recommended);
+  const values = (ids.length > 0 ? ids : [recommended]) as [string, ...string[]];
+  return z
+    .enum(values)
+    .optional()
+    .describe(
+      `Model to use for ${endpointPath}. Defaults to '${recommended}' (recommended) when omitted. ` +
+        `Valid models: ${values.join(", ")}. Parameter constraints (ratio, duration, etc.) are ` +
+        `model-specific — call runway_listModels for the exact values each model accepts.`
+    );
+}
+
 export interface CreateServerOptions {
   /**
    * Runway API secret. Defaults to `process.env.RUNWAYML_API_SECRET`.
@@ -432,7 +452,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   const server = new McpServer({
     name: "Runway",
     title: "Runway",
-    version: "1.0.0",
+    version: "1.2.0",
     websiteUrl: "https://runwayml.com",
     ...(icons ? { icons } : {}),
   });
@@ -468,6 +488,24 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
         "RUNWAYML_API_SECRET is not configured on the MCP server."
       );
     }
+
+    const method = (opts.method ?? "GET").toString().toUpperCase();
+    if (method === "POST" && typeof opts.body === "string") {
+      let body: unknown;
+      try {
+        body = JSON.parse(opts.body);
+      } catch {
+        throw new Error(`Invalid JSON body for Runway request ${p}.`);
+      }
+      const result = validatePayload(p, body);
+      if (!result.ok) {
+        throw new Error(
+          `Invalid Runway API request for ${p}:\n` +
+            result.findings.map((f) => `- ${f}`).join("\n")
+        );
+      }
+    }
+
     const res = await fetch(`${API_BASE}${p}`, {
       ...opts,
       headers: {
@@ -481,43 +519,120 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     return res.json();
   }
 
-  async function waitForTaskCompletion(taskId: string): Promise<RunwayTask> {
-    while (true) {
-      const task = (await callRunway(`/tasks/${taskId}`)) as RunwayTask;
-      if (
-        task.status === "SUCCEEDED" ||
-        task.status === "FAILED" ||
-        task.status === "CANCELLED"
-      ) {
-        return task;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
-    }
-  }
-
-  async function callRunwayAsync(
+  // Claude Desktop (and some other hosts) hard-timeout MCP tool calls around
+  // ~4 minutes. Video jobs regularly exceed that, so we NEVER block waiting for
+  // completion inside a tool handler. Submit → return taskId immediately → the
+  // MCP App viewer polls via runway_getTask (and Claude can recover the same
+  // way if the viewer is unavailable).
+  async function submitRunwayTask(
     p: string,
     opts: Partial<RequestInit> = {}
   ): Promise<RunwayTask> {
     const response = (await callRunway(p, opts)) as {
       id?: string;
     } & RunwayTask;
-    if (response?.id) return waitForTaskCompletion(response.id);
-    return response;
+    if (!response?.id) {
+      throw new Error(
+        `Runway ${p} did not return a task id: ${JSON.stringify(response)}`
+      );
+    }
+    return {
+      ...response,
+      id: response.id,
+      status: response.status ?? "PENDING",
+    };
   }
 
-  async function buildVideoResponse(task: RunwayTask, prompt?: string) {
+  function mediaKindFromUrl(url: string): "video" | "image" | "audio" {
+    if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) return "video";
+    if (/\.(mp3|wav|m4a|ogg)(\?|$)/i.test(url)) return "audio";
+    return "image";
+  }
+
+  function pendingInstructions(opts: {
+    kind: "video" | "image" | "audio";
+    taskId: string;
+    prompt?: string;
+  }): string {
+    const label =
+      opts.kind === "video"
+        ? "Video"
+        : opts.kind === "audio"
+          ? "Audio"
+          : "Image";
+    const waitHint =
+      opts.kind === "video"
+        ? "60-120 seconds"
+        : opts.kind === "audio"
+          ? "15-30 seconds"
+          : "20-45 seconds";
+    return [
+      `${label} generation submitted (taskId: ${opts.taskId}, status: PENDING).`,
+      ...(opts.prompt ? [`Prompt: ${opts.prompt}`] : []),
+      ``,
+      `CLAUDE DESKTOP / HOST TIMEOUT RECOVERY (read carefully):`,
+      `- This tool returned immediately on purpose. Do NOT treat a later host timeout as a failed generation.`,
+      `- An inline MCP App viewer (if shown) is already polling this task and will render the result when ready. While that viewer is visible, do NOT call runway_getTask just to poll.`,
+      `- NEVER re-submit or start a new generation for this same user request. Re-submitting wastes credits and creates duplicate jobs.`,
+      `- If no inline viewer appeared, or the host reported a tool timeout/cancellation after submit, the Runway job is still running. Wait ~${waitHint}, then call runway_getTask once with taskId="${opts.taskId}". If status is still PENDING/RUNNING/THROTTLED, wait again and retry — do not create a new task.`,
+      `- When runway_getTask returns SUCCEEDED, show the download markdown link from that result to the user.`,
+    ].join("\n");
+  }
+
+  async function buildSucceededMediaResponse(
+    task: RunwayTask,
+    opts: { kind?: "video" | "image" | "audio"; prompt?: string } = {}
+  ) {
     if (task.status !== "SUCCEEDED" || !task.output?.[0]) {
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(task) }],
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(task),
+          },
+        ],
+        structuredContent: {
+          kind: opts.kind ?? "image",
+          status: task.status,
+          taskId: task.id,
+          prompt: opts.prompt,
+          error: task.error,
+        },
       };
     }
-    const videoUrl: string = task.output[0];
+
+    const url: string = task.output[0];
+    const kind = opts.kind ?? mediaKindFromUrl(url);
+    if (kind === "audio") {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: [
+              `Audio ready (taskId: ${task.id}).`,
+              ``,
+              `Render this exact markdown link in your reply so the user can download it: [Download audio](${url})`,
+              ``,
+              `Do not mention the URL string itself or its expiry.`,
+            ].join("\n"),
+          },
+        ],
+        structuredContent: {
+          kind: "audio" as const,
+          status: "SUCCEEDED" as const,
+          url,
+          taskId: task.id,
+          prompt: opts.prompt,
+        },
+      };
+    }
+
     const preview = await fetchPreviewInline(task.previewUrls);
+    const label = kind === "video" ? "Download video" : "Download image";
     const text = [
-      `Video ready (taskId: ${task.id}).`,
+      `${kind === "video" ? "Video" : "Image"} ready (taskId: ${task.id}).`,
       ``,
-      `Render this exact markdown link in your reply so the user can download it: [Download video](${videoUrl})`,
+      `Render this exact markdown link in your reply so the user can download it: [${label}](${url})`,
       ``,
       `Do not mention the URL string itself or its expiry. If the user later asks to redownload and the link no longer works, call runway_refreshTaskUrl with taskId="${task.id}" to get a fresh URL.`,
     ].join("\n");
@@ -527,10 +642,36 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     return {
       content: baseContent,
       structuredContent: {
-        kind: "video",
-        url: videoUrl,
+        kind,
+        status: "SUCCEEDED" as const,
+        url,
         taskId: task.id,
-        prompt,
+        prompt: opts.prompt,
+      },
+    };
+  }
+
+  function buildPendingResponse(opts: {
+    kind: "video" | "image" | "audio";
+    task: RunwayTask;
+    prompt?: string;
+  }) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: pendingInstructions({
+            kind: opts.kind,
+            taskId: opts.task.id,
+            prompt: opts.prompt,
+          }),
+        },
+      ],
+      structuredContent: {
+        kind: opts.kind,
+        status: opts.task.status ?? "PENDING",
+        taskId: opts.task.id,
+        prompt: opts.prompt,
       },
     };
   }
@@ -582,13 +723,13 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     {
       title: "Generate Video",
       description:
-        "Generate a video from an image (image-to-video). The best model is Seedance (`seedance2`), used by default; pass `model` to override. The valid `ratio` and `duration` values depend on the chosen model, so call runway_listModels first to get the exact ratios, duration range, and which parameters that model requires (some models omit `duration` or require a specific `ratio`). If the user asks to generate a video, first use runway_generateImage to create an image, then pass it here as `promptImage`.",
+        "Generate a video from an image (image-to-video). Returns IMMEDIATELY with status PENDING and a taskId — it does NOT wait for the video to finish (Claude Desktop times out ~4 min blocking calls). An inline viewer polls and renders the video when ready. Do NOT re-submit on host timeouts; recover with runway_getTask(taskId) only if no viewer is polling. The best model is Seedance (`seedance2`), used by default; pass `model` to override. The valid `ratio` and `duration` values depend on the chosen model, so call runway_listModels first. If the user asks to generate a video from text only, first use runway_generateImage, then pass that image here as `promptImage`.",
       inputSchema: {
         promptImage: z.string(),
         promptText: z.string().optional(),
         ratio: z.string().optional(),
         duration: z.number().optional(),
-        model: z.string().optional(),
+        model: modelPicker("/image_to_video", "seedance2"),
       },
       annotations: {
         title: "Generate Video",
@@ -600,7 +741,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       _meta: { ui: { resourceUri: VIEWER_URI } },
     },
     async (params) => {
-      const task = await callRunwayAsync("/image_to_video", {
+      const task = await submitRunwayTask("/image_to_video", {
         method: "POST",
         body: JSON.stringify({
           model: params.model ?? "seedance2",
@@ -610,7 +751,11 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           duration: params.duration,
         }),
       });
-      return buildVideoResponse(task, params.promptText);
+      return buildPendingResponse({
+        kind: "video",
+        task,
+        prompt: params.promptText,
+      });
     }
   );
 
@@ -618,14 +763,15 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     "runway_generateImage",
     {
       title: "Generate Image",
-      description: `Generate an image from a text prompt and optional reference images. The best model for text/image-to-image is Nano Banana Pro (\`gemini_image3_pro\`), used by default; pass \`model\` to override. The valid \`ratio\` values depend on the chosen model, so call runway_listModels first to get the exact ratios each model supports (they vary widely). Reference images are provided as a url or a base64 data uri, each with a \`tag\` string that is referenced from the prompt. For example, if the user prompt is "IMG_1 on a red background" and the reference image has the tag "IMG_1", the model will use that reference image. The return of this function will contain a url to the generated image.`,
+      description:
+        "Generate an image from a text prompt and optional reference images. Returns IMMEDIATELY with status PENDING and a taskId — it does NOT wait for completion. An inline viewer polls and renders the image when ready. Do NOT re-submit on host timeouts; recover with runway_getTask(taskId) only if no viewer is polling. The best model is Nano Banana Pro (`gemini_image3_pro`), used by default; pass `model` to override. Call runway_listModels for valid `ratio` values. Reference images are a url or base64 data uri with an optional `tag` referenced from the prompt.",
       inputSchema: {
         promptText: z.string(),
         ratio: z.string(),
         referenceImages: z
           .array(z.object({ uri: z.string(), tag: z.string().optional() }))
           .optional(),
-        model: z.string().optional(),
+        model: modelPicker("/text_to_image", "gemini_image3_pro"),
       },
       annotations: {
         title: "Generate Image",
@@ -637,7 +783,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       _meta: { ui: { resourceUri: VIEWER_URI } },
     },
     async ({ promptText, ratio, referenceImages, model }) => {
-      const task = await callRunwayAsync("/text_to_image", {
+      const task = await submitRunwayTask("/text_to_image", {
         method: "POST",
         body: JSON.stringify({
           model: model ?? "gemini_image3_pro",
@@ -646,31 +792,11 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           referenceImages,
         }),
       });
-
-      if (task.status !== "SUCCEEDED" || !task.output?.[0]) {
-        return { content: [{ type: "text", text: JSON.stringify(task) }] };
-      }
-      const imageUrl: string = task.output[0];
-      const preview = await fetchPreviewInline(task.previewUrls);
-      const text = [
-        `Image ready (taskId: ${task.id}).`,
-        ``,
-        `Render this exact markdown link in your reply so the user can download it: [Download image](${imageUrl})`,
-        ``,
-        `Do not mention the URL string itself or its expiry. If the user later asks to redownload and the link no longer works, call runway_refreshTaskUrl with taskId="${task.id}" to get a fresh URL.`,
-      ].join("\n");
-      const baseContent = preview
-        ? [preview, { type: "text" as const, text }]
-        : [{ type: "text" as const, text }];
-      return {
-        content: baseContent,
-        structuredContent: {
-          kind: "image",
-          url: imageUrl,
-          taskId: task.id,
-          prompt: promptText,
-        },
-      };
+      return buildPendingResponse({
+        kind: "image",
+        task,
+        prompt: promptText,
+      });
     }
   );
 
@@ -679,10 +805,11 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     {
       title: "Upscale Video",
       description:
-        "Upscale a video to a higher resolution. videoUri takes in a url of a video or a " +
-        "data uri of a video. Uses the Magnific video upscaler by default; pass `model` " +
-        "to override.",
-      inputSchema: { videoUri: z.string(), model: z.string().optional() },
+        "Upscale a video to a higher resolution. Returns IMMEDIATELY with status PENDING and a taskId — does NOT wait for completion (avoids Claude Desktop ~4 min tool timeouts). An inline viewer polls and renders when ready; recover with runway_getTask(taskId) if needed, and NEVER re-submit the same upscale on timeout. videoUri is a url or data uri. Uses Magnific by default; pass `model` to override.",
+      inputSchema: {
+        videoUri: z.string(),
+        model: modelPicker("/video_upscale", "magnific_video_upscaler_creative"),
+      },
       annotations: {
         title: "Upscale Video",
         readOnlyHint: false,
@@ -693,14 +820,14 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       _meta: { ui: { resourceUri: VIEWER_URI } },
     },
     async ({ videoUri, model }) => {
-      const task = await callRunwayAsync("/video_upscale", {
+      const task = await submitRunwayTask("/video_upscale", {
         method: "POST",
         body: JSON.stringify({
           videoUri,
           model: model ?? "magnific_video_upscaler_creative",
         }),
       });
-      return buildVideoResponse(task);
+      return buildPendingResponse({ kind: "video", task });
     }
   );
 
@@ -708,7 +835,8 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     "runway_editVideo",
     {
       title: "Edit Video",
-      description: `Edit a video (video-to-video) using Runway Aleph. \`promptText\` describes the edit; \`videoUri\` is a url or data uri of the source video. The best model is Aleph (\`aleph2\`), used by default; pass \`model\` to override. The valid \`ratio\` values depend on the chosen model, so call runway_listModels first (Aleph also accepts a \`targetAspectRatio\` such as "16:9"). Reference images are provided as a url or base64 data uri, each with a \`tag\` referenced from the prompt (e.g. prompt "IMG_1 on a red background" with a reference image tagged "IMG_1"). Note: reference images are only supported by the legacy \`gen4_aleph\` model — pass \`model\`: "gen4_aleph" when providing referenceImages.`,
+      description:
+        "Edit a video (video-to-video) using Runway Aleph. Returns IMMEDIATELY with status PENDING and a taskId — does NOT wait for completion (avoids Claude Desktop ~4 min tool timeouts). An inline viewer polls and renders when ready; recover with runway_getTask(taskId) if needed, and NEVER re-submit the same edit on timeout. `promptText` describes the edit; `videoUri` is a url or data uri. Default model is Aleph (`aleph2`). Call runway_listModels for valid `ratio` values.",
       inputSchema: {
         promptText: z.string(),
         videoUri: z.string(),
@@ -716,7 +844,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
         referenceImages: z
           .array(z.object({ uri: z.string(), tag: z.string().optional() }))
           .optional(),
-        model: z.string().optional(),
+        model: modelPicker("/video_to_video", "aleph2"),
       },
       annotations: {
         title: "Edit Video",
@@ -728,7 +856,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       _meta: { ui: { resourceUri: VIEWER_URI } },
     },
     async ({ promptText, videoUri, ratio, referenceImages, model }) => {
-      const task = await callRunwayAsync("/video_to_video", {
+      const task = await submitRunwayTask("/video_to_video", {
         method: "POST",
         body: JSON.stringify({
           promptText,
@@ -740,23 +868,24 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           model: model ?? "aleph2",
         }),
       });
-      return buildVideoResponse(task, promptText);
+      return buildPendingResponse({
+        kind: "video",
+        task,
+        prompt: promptText,
+      });
     }
   );
 
   server.tool(
     "runway_generateAudio",
-    "Generate spoken audio (text-to-speech) from text. The default model is `seed_audio` " +
-      "(ByteDance's Seed audio model, which uses a default voice if none is given); " +
-      "`eleven_multilingual_v2` (ElevenLabs) is also available but requires a `voice`. " +
-      "Optionally pass a `voice` object. Call runway_listModels to see all audio models.",
+    "Generate spoken audio (text-to-speech) from text. Returns IMMEDIATELY with status PENDING and a taskId — does NOT wait for completion. Poll with runway_getTask(taskId) after ~15-30s; never re-submit on host timeouts. Default model is `seed_audio`; `eleven_multilingual_v2` requires a `voice`. Call runway_listModels for audio models.",
     {
       promptText: z.string(),
       voice: z.any().optional(),
-      model: z.string().optional(),
+      model: modelPicker("/text_to_speech", "seed_audio"),
     },
     async ({ promptText, voice, model }) => {
-      const task = await callRunwayAsync("/text_to_speech", {
+      const task = await submitRunwayTask("/text_to_speech", {
         method: "POST",
         body: JSON.stringify({
           model: model ?? "seed_audio",
@@ -764,29 +893,75 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           ...(voice ? { voice } : {}),
         }),
       });
-
-      if (task.output) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Here is the URL of the audio: ${task.output[0]}. Return to the user, as a markdown link, the URL of the audio and the prompt that was used to generate it.`,
-            },
-          ],
-        };
-      } else {
-        return { content: [{ type: "text", text: JSON.stringify(task) }] };
-      }
+      return buildPendingResponse({
+        kind: "audio",
+        task,
+        prompt: promptText,
+      });
     }
   );
 
-  server.tool(
+  server.registerTool(
     "runway_getTask",
-    "Get the details of a task, if the task status is 'SUCCEEDED', there will be a 'url' field in the response. If the task status is 'FAILED', there will be a 'error' field in the response. If the task status is 'PENDING' or 'RUNNING', you can call this tool again in 5 seconds to get the task details.",
-    { taskId: z.string() },
+    {
+      title: "Get Runway Task",
+      description:
+        "Check status / fetch the result of a previously submitted Runway task by ID. Generation tools return immediately with PENDING + taskId; use this to recover results when no inline viewer is polling, or after a Claude Desktop tool timeout/cancellation (the job keeps running — do NOT re-submit). Suggested cadence: wait 20-45s for images, 60-120s for video, then call once; if still PENDING/RUNNING/THROTTLED, wait and retry. When SUCCEEDED, the response includes the asset URL and renders the inline media viewer.",
+      inputSchema: { taskId: z.string() },
+      annotations: {
+        title: "Get Runway Task",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+      _meta: { ui: { resourceUri: VIEWER_URI } },
+    },
     async ({ taskId }) => {
-      const task = await callRunway(`/tasks/${taskId}`);
-      return { content: [{ type: "text", text: JSON.stringify(task) }] };
+      const task = (await callRunway(`/tasks/${taskId}`)) as RunwayTask;
+
+      if (
+        task.status === "PENDING" ||
+        task.status === "RUNNING" ||
+        task.status === "THROTTLED"
+      ) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: [
+                `Task ${taskId} is still ${task.status}.`,
+                ``,
+                `Do NOT start a new generation. Wait 30-60s (images) or 60-120s (video), then call runway_getTask again with the same taskId.`,
+              ].join("\n"),
+            },
+          ],
+          structuredContent: {
+            status: task.status,
+            taskId: task.id,
+          },
+        };
+      }
+
+      if (task.status === "FAILED" || task.status === "CANCELLED") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Task ${taskId} ${task.status.toLowerCase()}${
+                task.error ? `: ${task.error}` : "."
+              }`,
+            },
+          ],
+          structuredContent: {
+            status: task.status,
+            taskId: task.id,
+            error: task.error,
+          },
+        };
+      }
+
+      return buildSucceededMediaResponse(task);
     }
   );
 
@@ -816,21 +991,14 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
               text: `Task ${taskId} is not ready (status: ${task.status}).`,
             },
           ],
+          structuredContent: {
+            status: task.status,
+            taskId,
+            error: task.error,
+          },
         };
       }
-      const url: string = task.output[0];
-      const isVideo = /\.mp4(\?|$)/i.test(url);
-      const kind = isVideo ? "video" : "image";
-      const label = isVideo ? "Download video" : "Download image";
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Fresh download link for task ${taskId}. Render this markdown link in your reply: [${label}](${url})`,
-          },
-        ],
-        structuredContent: { kind, url, taskId },
-      };
+      return buildSucceededMediaResponse(task);
     }
   );
 
