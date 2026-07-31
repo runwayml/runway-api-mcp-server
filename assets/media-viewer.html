@@ -72,6 +72,10 @@
         background: var(--media-bg);
         display: block;
       }
+      audio.media {
+        min-height: 54px;
+        background: transparent;
+      }
       .meta {
         font-size: 13px;
         color: var(--muted);
@@ -176,10 +180,11 @@
         }
 
         function attachMediaHandlers() {
-          const media = root.querySelector("img, video");
+          const media = root.querySelector("img, video, audio");
           if (!media) return;
           const onload = () => notifySize();
           media.addEventListener("load", onload);
+          media.addEventListener("loadedmetadata", onload);
           media.addEventListener("loadeddata", onload);
           media.addEventListener("error", onMediaError);
         }
@@ -213,8 +218,17 @@
 
         function showError(msg) {
           stopPolling();
-          root.innerHTML = `<div class="empty">${msg}</div>`;
+          root.innerHTML = `<div class="empty">${escapeHtml(msg)}</div>`;
           notifySize();
+        }
+
+        function failureDetails(payload) {
+          if (!payload) return "";
+          const message =
+            payload.error || payload.failure || payload.failureReason || "";
+          const code = payload.failureCode || "";
+          if (message && code) return `${message} (${code})`;
+          return message || code;
         }
 
         function stopPolling() {
@@ -302,9 +316,10 @@
           }
 
           if (status === "FAILED" || status === "CANCELLED") {
+            const details = failureDetails(merged);
             showError(
-              merged.error
-                ? `Generation ${String(status).toLowerCase()}: ${merged.error}`
+              details
+                ? `Generation ${String(status).toLowerCase()}: ${details}`
                 : `Generation ${String(status).toLowerCase()}.`
             );
             return;
@@ -332,22 +347,6 @@
             showError("No media URL in tool result.");
             return;
           }
-          if (payload.kind === "audio") {
-            // Audio has no visual player in this widget; show a clear ready state.
-            currentPayload = payload;
-            stopPolling();
-            const promptLine = payload.prompt
-              ? `<div class="meta">${escapeHtml(payload.prompt)}</div>`
-              : "";
-            root.innerHTML =
-              `<div class="empty">Audio ready.</div>` +
-              promptLine +
-              `<div class="actions"><a class="btn" href="${escapeAttr(
-                payload.url
-              )}" target="_blank" rel="noopener">Download audio</a></div>`;
-            notifySize();
-            return;
-          }
           currentPayload = payload;
           stopPolling();
           const escapedUrl = escapeAttr(payload.url);
@@ -358,6 +357,11 @@
             root.innerHTML =
               `<video class="media" src="${escapedUrl}" controls autoplay muted loop playsinline></video>` +
               promptLine;
+          } else if (payload.kind === "audio") {
+            root.innerHTML =
+              `<audio class="media" src="${escapedUrl}" controls preload="metadata"></audio>` +
+              promptLine +
+              `<div class="actions"><a class="btn" href="${escapedUrl}" target="_blank" rel="noopener">Download audio</a></div>`;
           } else {
             root.innerHTML =
               `<img class="media" src="${escapedUrl}" alt="Generated image" />` +
@@ -453,7 +457,7 @@
                     if (!parsed.kind) {
                       parsed.kind = /\.(mp4|webm|mov)(\?|$)/i.test(parsed.url)
                         ? "video"
-                        : /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(parsed.url)
+                        : /\.(mp3|wav|m4a|ogg|aac|flac|opus)(\?|$)/i.test(parsed.url)
                           ? "audio"
                           : "image";
                     }
@@ -492,9 +496,10 @@
             return;
           }
           if (payload.status === "FAILED" || payload.status === "CANCELLED") {
+            const details = failureDetails(payload);
             showError(
-              payload.error
-                ? `Generation ${String(payload.status).toLowerCase()}: ${payload.error}`
+              details
+                ? `Generation ${String(payload.status).toLowerCase()}: ${details}`
                 : `Generation ${String(payload.status).toLowerCase()}.`
             );
             return;
@@ -597,7 +602,7 @@
           {
             protocolVersion: "2026-01-26",
             appCapabilities: {},
-            appInfo: { name: "runway-media-viewer", version: "1.1.0" },
+            appInfo: { name: "runway-media-viewer", version: "1.2.0" },
           },
           initId
         );

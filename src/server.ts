@@ -51,6 +51,9 @@ interface RunwayTask {
     | "THROTTLED";
   url?: string;
   error?: string;
+  failure?: string;
+  failureCode?: string;
+  failureReason?: string;
   [key: string]: any;
 }
 
@@ -545,8 +548,12 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
 
   function mediaKindFromUrl(url: string): "video" | "image" | "audio" {
     if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) return "video";
-    if (/\.(mp3|wav|m4a|ogg)(\?|$)/i.test(url)) return "audio";
+    if (/\.(mp3|wav|m4a|ogg|aac|flac|opus)(\?|$)/i.test(url)) return "audio";
     return "image";
+  }
+
+  function taskFailureMessage(task: RunwayTask): string | undefined {
+    return task.failure ?? task.error ?? task.failureReason;
   }
 
   function pendingInstructions(opts: {
@@ -596,7 +603,8 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           status: task.status,
           taskId: task.id,
           prompt: opts.prompt,
-          error: task.error,
+          error: taskFailureMessage(task),
+          failureCode: task.failureCode,
         },
       };
     }
@@ -876,13 +884,25 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     }
   );
 
-  server.tool(
+  server.registerTool(
     "runway_generateAudio",
-    "Generate spoken audio (text-to-speech) from text. Returns IMMEDIATELY with status PENDING and a taskId — does NOT wait for completion. Poll with runway_getTask(taskId) after ~15-30s; never re-submit on host timeouts. Default model is `seed_audio`; `eleven_multilingual_v2` requires a `voice`. Call runway_listModels for audio models.",
     {
-      promptText: z.string(),
-      voice: z.any().optional(),
-      model: modelPicker("/text_to_speech", "seed_audio"),
+      title: "Generate Audio",
+      description:
+        "Generate spoken audio (text-to-speech) from text. Returns IMMEDIATELY with status PENDING and a taskId — does NOT wait for completion. An inline viewer polls and renders an audio player when ready. Do NOT re-submit on host timeouts; recover with runway_getTask(taskId) only if no viewer is polling. Default model is `seed_audio`; `eleven_multilingual_v2` requires a `voice`. Call runway_listModels for audio models.",
+      inputSchema: {
+        promptText: z.string(),
+        voice: z.any().optional(),
+        model: modelPicker("/text_to_speech", "seed_audio"),
+      },
+      annotations: {
+        title: "Generate Audio",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+      _meta: { ui: { resourceUri: VIEWER_URI } },
     },
     async ({ promptText, voice, model }) => {
       const task = await submitRunwayTask("/text_to_speech", {
@@ -944,19 +964,21 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
       }
 
       if (task.status === "FAILED" || task.status === "CANCELLED") {
+        const failure = taskFailureMessage(task);
         return {
           content: [
             {
               type: "text" as const,
               text: `Task ${taskId} ${task.status.toLowerCase()}${
-                task.error ? `: ${task.error}` : "."
+                failure ? `: ${failure}` : "."
               }`,
             },
           ],
           structuredContent: {
             status: task.status,
             taskId: task.id,
-            error: task.error,
+            error: failure,
+            failureCode: task.failureCode,
           },
         };
       }
@@ -994,7 +1016,8 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
           structuredContent: {
             status: task.status,
             taskId,
-            error: task.error,
+            error: taskFailureMessage(task),
+            failureCode: task.failureCode,
           },
         };
       }
