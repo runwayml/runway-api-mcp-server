@@ -1,3 +1,10 @@
+> [!WARNING]  
+> This repository has been archived.
+> - If you're a developer looking to integrate with the [Runway API](https://dev.runwayml.com/), see: https://dev.runwayml.com/agents
+> - For other use cases, see: https://runway.com/mcp
+
+<br>
+
 ![Demo](demo.gif)
 
 <small>Video sped up for demo purposes</small>
